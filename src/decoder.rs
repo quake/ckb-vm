@@ -116,7 +116,26 @@ impl Decoder {
     // - https://en.wikichip.org/wiki/macro-operation_fusion#Proposed_fusion_operations
     // - https://carrv.github.io/2017/papers/clark-rv8-carrv2017.pdf
     pub fn decode_mop<M: Memory>(&mut self, memory: &mut M, pc: u64) -> Result<Instruction, Error> {
-        let head_instruction = self.decode_raw(memory, pc)?;
+        // since we are using RISCV_MAX_MEMORY as the default key in the instruction cache, have to check out of bound error first
+        if pc as usize >= RISCV_MAX_MEMORY {
+            return Err(Error::MemOutOfBound);
+        }
+        let instruction_cache_key = cache_key(pc);
+        let cached_instruction = self.instructions_cache[instruction_cache_key];
+        if cached_instruction.0 == pc {
+            return Ok(cached_instruction.1);
+        }
+        let instruction = self.decode_mop_inner(memory, pc)?;
+        self.instructions_cache[instruction_cache_key] = (pc, instruction);
+        Ok(instruction)
+    }
+
+    fn decode_mop_inner<M: Memory>(
+        &mut self,
+        memory: &mut M,
+        pc: u64,
+    ) -> Result<Instruction, Error> {
+        let head_instruction = self.decode_raw_without_cache(memory, pc)?;
         let head_opcode = extract_opcode(head_instruction);
         match head_opcode {
             insts::OP_ADD => {
@@ -543,14 +562,29 @@ impl Decoder {
         }
     }
 
+    fn decode_raw_without_cache<M: Memory>(
+        &mut self,
+        memory: &mut M,
+        pc: u64,
+    ) -> Result<Instruction, Error> {
+        let instruction_bits = self.decode_bits(memory, pc)?;
+        for factory in &self.factories {
+            if let Some(instruction) = factory(instruction_bits, self.version) {
+                return Ok(instruction);
+            }
+        }
+        Err(Error::InvalidInstruction {
+            pc,
+            instruction: instruction_bits,
+        })
+    }
+
     pub fn decode<M: Memory>(&mut self, memory: &mut M, pc: u64) -> Result<Instruction, Error> {
-        let instruction = if self.mop {
+        if self.mop {
             self.decode_mop(memory, pc)
         } else {
             self.decode_raw(memory, pc)
-        }?;
-        self.instructions_cache[cache_key(pc)] = (pc, instruction);
-        Ok(instruction)
+        }
     }
 
     pub fn reset_instructions_cache(&mut self) {
