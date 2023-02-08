@@ -108,22 +108,6 @@ impl Decoder {
         })
     }
 
-    pub fn decode_raw_without_cache_lookup<M: Memory>(&mut self, memory: &mut M, pc: u64) -> Result<Instruction, Error> {
-        let instruction_bits = self.decode_bits(memory, pc)?;
-        for factory in &self.factories {
-            if let Some(instruction) = factory(instruction_bits, self.version) {
-                let instruction_cache_key = cache_key(pc);
-                self.instructions_cache[instruction_cache_key] = (pc, instruction);
-                return Ok(instruction);
-            }
-        }
-        Err(Error::InvalidInstruction {
-            pc,
-            instruction: instruction_bits,
-        })
-    }
-
-
     // Macro-Operation Fusion (also Macro-Op Fusion, MOP Fusion, or Macrofusion) is a hardware optimization technique found
     // in many modern microarchitectures whereby a series of adjacent macro-operations are merged into a single
     // macro-operation prior or during decoding. Those instructions are later decoded into fused-µOPs.
@@ -132,16 +116,7 @@ impl Decoder {
     // - https://en.wikichip.org/wiki/macro-operation_fusion#Proposed_fusion_operations
     // - https://carrv.github.io/2017/papers/clark-rv8-carrv2017.pdf
     pub fn decode_mop<M: Memory>(&mut self, memory: &mut M, pc: u64) -> Result<Instruction, Error> {
-        // since we are using RISCV_MAX_MEMORY as the default key in the instruction cache, have to check out of bound error first
-        if pc as usize >= RISCV_MAX_MEMORY {
-            return Err(Error::MemOutOfBound);
-        }
-        let instruction_cache_key = cache_key(pc);
-        let cached_instruction = self.instructions_cache[instruction_cache_key];
-        if cached_instruction.0 == pc {
-            return Ok(cached_instruction.1);
-        }
-        let head_instruction = self.decode_raw_without_cache_lookup(memory, pc)?;
+        let head_instruction = self.decode_raw(memory, pc)?;
         let head_opcode = extract_opcode(head_instruction);
         match head_opcode {
             insts::OP_ADD => {
@@ -227,7 +202,6 @@ impl Decoder {
                     Ok(Some(set_instruction_length_n(fuze_inst.0, fuze_size)))
                 };
                 if let Ok(Some(i)) = rule_adc() {
-                    self.instructions_cache[instruction_cache_key] = (pc, i);
                     Ok(i)
                 } else {
                     Ok(head_instruction)
@@ -323,7 +297,6 @@ impl Decoder {
                     Ok(Some(set_instruction_length_n(fuze_inst.0, fuze_size)))
                 };
                 if let Ok(Some(i)) = rule_sbb() {
-                    self.instructions_cache[instruction_cache_key] = (pc, i);
                     Ok(i)
                 } else {
                     Ok(head_instruction)
@@ -347,9 +320,7 @@ impl Decoder {
                             let fuze_inst = Utype::new_s(insts::OP_FAR_JUMP_ABS, RA, fuze_imm);
                             let next_size = instruction_length(next_instruction);
                             let fuze_size = head_size + next_size;
-                            let i = set_instruction_length_n(fuze_inst.0, fuze_size);
-                            self.instructions_cache[instruction_cache_key] = (pc, i);
-                            Ok(i)
+                            Ok(set_instruction_length_n(fuze_inst.0, fuze_size))
                         } else {
                             Ok(head_instruction)
                         }
@@ -364,9 +335,7 @@ impl Decoder {
                                 Utype::new_s(insts::OP_CUSTOM_LOAD_IMM, head_inst.rd(), fuze_imm);
                             let next_size = instruction_length(next_instruction);
                             let fuze_size = head_size + next_size;
-                            let i = set_instruction_length_n(fuze_inst.0, fuze_size);
-                            self.instructions_cache[instruction_cache_key] = (pc, i);
-                            Ok(i)
+                            Ok(set_instruction_length_n(fuze_inst.0, fuze_size))
                         } else {
                             Ok(head_instruction)
                         }
@@ -392,9 +361,7 @@ impl Decoder {
                             let fuze_inst = Utype::new_s(insts::OP_FAR_JUMP_REL, RA, fuze_imm);
                             let next_size = instruction_length(next_instruction);
                             let fuze_size = head_size + next_size;
-                            let i = set_instruction_length_n(fuze_inst.0, fuze_size);
-                            self.instructions_cache[instruction_cache_key] = (pc, i);
-                            Ok(i)
+                            Ok(set_instruction_length_n(fuze_inst.0, fuze_size))
                         } else {
                             Ok(head_instruction)
                         }
@@ -428,9 +395,7 @@ impl Decoder {
                                 next_inst.rd(),
                             );
                             let fuze_size = head_size + next_size;
-                            let i = set_instruction_length_n(fuze_inst.0, fuze_size);
-                            self.instructions_cache[instruction_cache_key] = (pc, i);
-                            Ok(i)
+                            Ok(set_instruction_length_n(fuze_inst.0, fuze_size))
                         } else {
                             Ok(head_instruction)
                         }
@@ -464,9 +429,7 @@ impl Decoder {
                                 next_inst.rd(),
                             );
                             let fuze_size = head_size + next_size;
-                            let i = set_instruction_length_n(fuze_inst.0, fuze_size);
-                            self.instructions_cache[instruction_cache_key] = (pc, i);
-                            Ok(i)
+                            Ok(set_instruction_length_n(fuze_inst.0, fuze_size))
                         } else {
                             Ok(head_instruction)
                         }
@@ -500,9 +463,7 @@ impl Decoder {
                                 next_inst.rd(),
                             );
                             let fuze_size = head_size + next_size;
-                            let i = set_instruction_length_n(fuze_inst.0, fuze_size);
-                            self.instructions_cache[instruction_cache_key] = (pc, i);
-                            Ok(i)
+                            Ok(set_instruction_length_n(fuze_inst.0, fuze_size))
                         } else {
                             Ok(head_instruction)
                         }
@@ -536,9 +497,7 @@ impl Decoder {
                                 next_inst.rd(),
                             );
                             let fuze_size = head_size + next_size;
-                            let i = set_instruction_length_n(fuze_inst.0, fuze_size);
-                            self.instructions_cache[instruction_cache_key] = (pc, i);
-                            Ok(i)
+                            Ok(set_instruction_length_n(fuze_inst.0, fuze_size))
                         } else {
                             Ok(head_instruction)
                         }
@@ -572,9 +531,7 @@ impl Decoder {
                                 next_inst.rd(),
                             );
                             let fuze_size = head_size + next_size;
-                            let i = set_instruction_length_n(fuze_inst.0, fuze_size);
-                            self.instructions_cache[instruction_cache_key] = (pc, i);
-                            Ok(i)
+                            Ok(set_instruction_length_n(fuze_inst.0, fuze_size))
                         } else {
                             Ok(head_instruction)
                         }
@@ -587,11 +544,13 @@ impl Decoder {
     }
 
     pub fn decode<M: Memory>(&mut self, memory: &mut M, pc: u64) -> Result<Instruction, Error> {
-        if self.mop {
+        let instruction = if self.mop {
             self.decode_mop(memory, pc)
         } else {
             self.decode_raw(memory, pc)
-        }
+        }?;
+        self.instructions_cache[cache_key(pc)] = (pc, instruction);
+        Ok(instruction)
     }
 
     pub fn reset_instructions_cache(&mut self) {
